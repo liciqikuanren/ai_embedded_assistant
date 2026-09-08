@@ -1,0 +1,4 @@
+PyQt6>=6.6
+pyserial>=3.5
+mcp>=1.0
+pyyaml>=6.0
