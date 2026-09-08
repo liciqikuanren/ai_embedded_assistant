@@ -15,6 +15,13 @@ try:
 except Exception:
     pass
 
+# PyInstaller windowed（无控制台）下 stdout/stderr 为 None，会让日志/uvicorn 静默失败：
+# 兜底重定向到 devnull，保证冻结版里 MCP 等后台服务可正常启动。
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
