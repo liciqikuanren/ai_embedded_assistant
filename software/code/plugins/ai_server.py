@@ -13,10 +13,13 @@ import http.server
 import json
 import re
 import threading
+import time
 import urllib.request
 from collections import deque
 
 from mcp.server.fastmcp import FastMCP
+
+import uvicorn
 
 from core import codec
 from core.codec import NEWLINE_BYTES, bytes_to_hex, bytes_to_text
@@ -56,7 +59,7 @@ class RxBuffer:
 
 
 def build_server(serial, transmitter, config, log, rxbuf: RxBuffer,
-                 extra: dict | None = None) -> FastMCP:
+                 extra: dict | None = None, switcher=None) -> FastMCP:
     """构造 FastMCP 实例并注册工具。
 
     extra：调试模式可选服务 {"tcp_forward":.., "justfloat":.., "float_recorder":..}；
@@ -208,21 +211,34 @@ def build_server(serial, transmitter, config, log, rxbuf: RxBuffer,
 
     @mcp.tool()
     def config_load(path: str = "") -> dict:
-        """按需加载：从指定 .yaml/.json 读取配置（缺省重新加载默认配置）。"""
+        """按需加载：从指定 .yaml/.json 读取配置（缺省重新加载默认配置）。
+        mode 变化会触发无头热切换：按新模式装卸插件并重启 MCP 刷新工具集（约 1~2s）。"""
+        prev_mode = config.get("mode", "serial")
         if path:
             config.load_from(path)
         else:
             config.load()
+        new_mode = config.get("mode", "serial")
+        switched = new_mode != prev_mode
+        if switcher is not None and switched and new_mode in _MODES:
+            switcher(new_mode)
         return {"ok": True, "path": config.path,
-                "mode": config.get("mode", "serial")}
+                "mode": new_mode, "hot_switch": switched}
 
     @mcp.tool()
     def config_set(key: str, value) -> dict:
-        """按需修改：设置一项配置并立即保存（仅支持已定义的配置键）。"""
+        """按需修改：设置一项配置并立即保存（仅支持已定义的配置键）。
+        key=mode 时触发无头热切换：按新模式装卸插件并重启 MCP 刷新工具集（约 1~2s）。"""
         if key not in _CONFIG_KEYS:
             return {"ok": False, "message": f"未知配置键：{key}（可用 config_status 查看键数）"}
+        prev_mode = config.get("mode", "serial")
         config.set(key, value)
-        return {"ok": True, "key": key, "value": config.get(key)}
+        switched = False
+        if key == "mode" and switcher is not None and str(value) != prev_mode and str(value) in _MODES:
+            switcher(str(value))
+            switched = True
+        return {"ok": True, "key": key, "value": config.get(key),
+                "hot_switch": switched}
 
     # ---------------- 调试模式工具（按服务存在与否注册） ----------------
     tcp = extra.get("tcp_forward")
@@ -502,6 +518,52 @@ class ReplyHttpServer:
         return _Handler
 
 
+_MODES = ("serial", "serial_vofa", "rtt_shell", "rtt_vofa")
+
+
+async def _switch_plugins_for_mode(ctx, mode: str) -> None:
+    """无头模式热切换（等价 GUI 的 ui/controller.SerialController._switch_mode，
+    去掉 UI 面板部分）：按 mode 装卸插件并重启 ai_server，使 MCP 工具集随新模式刷新。"""
+    if mode not in _MODES:
+        return
+    from plugins.float_recorder import Plugin as FloatRecorderPlugin
+    from plugins.justfloat import Plugin as JustFloatPlugin
+    from plugins.rtt import Plugin as RttPlugin
+    from plugins.tcp_forward import Plugin as TcpForwardPlugin
+
+    cordis = getattr(ctx, "host", None)
+    if cordis is None:
+        return
+    want_wave = mode in ("serial_vofa", "rtt_vofa")
+    want_rtt = mode in ("rtt_shell", "rtt_vofa")
+
+    for name in ("float_recorder", "justfloat", "tcp_forward"):
+        if not want_wave and ctx.get(name, strict=False) is not None:
+            await cordis.unload_plugin_async(name)
+    if not want_rtt and ctx.get("rtt", strict=False) is not None:
+        await cordis.unload_plugin_async("rtt")
+
+    if want_rtt and ctx.get("rtt", strict=False) is None:
+        await cordis.load_plugin_async(RttPlugin())
+    if want_wave:
+        if ctx.get("tcp_forward", strict=False) is None:
+            await cordis.load_plugin_async(TcpForwardPlugin())
+        if ctx.get("justfloat", strict=False) is None:
+            await cordis.load_plugin_async(JustFloatPlugin())
+        if ctx.get("float_recorder", strict=False) is None:
+            await cordis.load_plugin_async(FloatRecorderPlugin())
+
+    # 重启 AI 接口：按新模式的可用服务重新注册 MCP 工具（等旧端口释放）
+    if ctx.get("ai_server", strict=False) is not None:
+        await cordis.unload_plugin_async("ai_server")
+        await asyncio.sleep(0.5)
+    await cordis.load_plugin_async(Plugin())
+    try:
+        await ctx.emit("mode_changed", {"mode": mode})
+    except Exception:
+        pass
+
+
 class Plugin:
     name = "ai_server"
     inject = ["serial", "transmitter", "config", "log"]
@@ -545,17 +607,42 @@ class Plugin:
 
         ctx.on("rtt_shell_rx", on_rtt_shell_rx)
 
-        server = build_server(serial, transmitter, config, log, rxbuf, extra)
-        ctx.provide("ai_server", server)
-
         # 在现有后台 asyncio 循环里作为任务运行（比另开线程更可靠）
         loop = asyncio.get_running_loop()
 
+        def request_mode_switch(mode: str) -> None:
+            """MCP 改 mode 后的无头热切换：稍延迟执行，先让本次响应发出，再重启 AI 接口。"""
+            def _run():
+                time.sleep(1.0)
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        _switch_plugins_for_mode(ctx, mode), loop).result(timeout=30)
+                except Exception as e:
+                    log(f"AI 接口模式热切换失败：{e}")
+
+            threading.Thread(target=_run, daemon=True).start()
+
+        server = build_server(serial, transmitter, config, log, rxbuf, extra,
+                              switcher=request_mode_switch)
+        ctx.provide("ai_server", server)
+
+        host = config.get("ai_server_host", "127.0.0.1")
+        port = int(config.get("ai_server_port", 8765))
+
+        # 持有 uvicorn.Server 运行 Streamable HTTP（等价 FastMCP.run_streamable_http_async）。
+        # 注意：不能靠 task.cancel() 停 uvicorn——serve() 中途被取消不会执行 shutdown()，
+        # 监听 socket 不释放，热切换重启时新实例绑定 8765 会报 10048。要用 should_exit 优雅停机。
+        uv_box: list = []
+
         async def _run_server():
-            """包装运行：uvicorn 端口冲突时 sys.exit(1) 是 SystemExit，必须拦下，
+            """包装运行：端口冲突时 uvicorn 抛 SystemExit，必须拦下，
             否则会杀死整个后台事件循环（热切换重启 AI 接口时尤其关键）。"""
             try:
-                await server.run_streamable_http_async()
+                app = server.streamable_http_app()
+                cfg = uvicorn.Config(app, host=host, port=port, log_level="warning")
+                uv = uvicorn.Server(cfg)
+                uv_box.append(uv)
+                await uv.serve()
             except SystemExit:
                 log("AI 接口退出（端口冲突或主动停止，不影响后台循环）")
             except Exception as e:
@@ -586,20 +673,30 @@ class Plugin:
         task.add_done_callback(on_done)
 
         async def teardown():
-            """停止 AI 接口：取消任务并等待 uvicorn 完全关闭（释放端口，
-            否则热切换重启时新实例会因端口未释放而绑定失败）。"""
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, SystemExit):
-                pass
+            """停止 AI 接口：请求 uvicorn 优雅停机（should_exit）并等待退出，
+            确保监听端口释放后再重启（避免 10048）；超时则取消兜底。"""
+            uv = uv_box[0] if uv_box else None
+            if uv is not None:
+                uv.should_exit = True
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=5)
+                except asyncio.TimeoutError:
+                    task.cancel()
+                    try:
+                        await task
+                    except (asyncio.CancelledError, SystemExit):
+                        pass
+            else:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, SystemExit):
+                    pass
             reply.stop()
             log("AI 接口已停止")
 
         ctx.effect(lambda: None, teardown)
 
-        host = config.get("ai_server_host", "127.0.0.1")
-        port = int(config.get("ai_server_port", 8765))
         log(f"AI 接口已启动：http://{host}:{port}/mcp")
         # 通知 UI：AI 接口已就绪（stateless_http 无 session，重启不失效）
         asyncio.run_coroutine_threadsafe(

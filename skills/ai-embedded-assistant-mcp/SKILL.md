@@ -73,7 +73,7 @@ AI嵌入式助手是上位机（主机侧）调试软件：**串口/RTT 调试 +
 - **串口**：`list_ports` `open_port(port,baudrate,parity,stopbits,flow)` `close_port` `get_status`
 - **通用收发**（仅 `serial`）：`send(data,as_hex,encoding,newline)` `read_received(as_hex,encoding,clear)`
 - **指令**（FireWater，`serial_vofa`）：`list_commands` `send_command("temp_sw:1;temp_tar:37;")` `set_params({...})` `send_preset("闭环控制默认")`；参数名与范围会被校验
-- **配置**（全模式）：`config_status` `config_save(path)` `config_load(path)` `config_set(key,value)`（支持 `mode` 等键，改 `mode` 即热切换）
+- **配置**（全模式）：`config_status` `config_save(path)` `config_load(path)` `config_set(key,value)`（支持 `mode` 等键；**改 `mode` 或加载出不同 mode 会触发热切换：约 1~2s 后 MCP 重启、工具集随新模式刷新，响应里 `hot_switch: true` 表示已触发**）
 - **RTT**（rtt 模式）：`rtt_connect` `rtt_disconnect` `rtt_status` `shell_exec(cmd,timeout)`（响应式，等待提示符返回）`read_log(count,grep,level)`（拉取 ch2 日志）
 - **波形/录制**（vofa 模式）：`tcp_forward_start/stop/status`；`justfloat_status/enable/reset/frames/latest/rename/reset_names/apply_doc_channels`；`float_recorder_start/pause/resume/stop/status/list/set_dir/set_duration/set_sample_hz`
 
@@ -106,7 +106,7 @@ AI嵌入式助手是上位机（主机侧）调试软件：**串口/RTT 调试 +
 
 ## 5. 注意事项 / 坑
 
-- 工具随模式出现：调不到某个工具先 `config_status` 看 mode、确认对应服务已加载（改 mode 热切换，无需重启软件）。
+- 工具随模式出现：调不到某个工具先 `config_status` 看 mode、确认对应服务已加载。切模式用 `config_set({"mode": ...})`（或 `config_load` 带不同 mode 的文件）——热切换约 1~2s（MCP 短暂重连），响应 `hot_switch: true` 后再 `tools/list`/`config_status` 确认工具集已更新；无需重启软件。
 - 调试查看数据优先走「录制 CSV + 读文件」，别指望读原始字节（JustFloat 100Hz 二进制帧，原始字节无意义）。
 - 指令/参数越界会被拒（如 `temp_sw:2`、`temp_tar:150`）——先 `list_commands` 看元数据再发。
 - 10ms 高频帧只在后台解析/录制，UI 表格 250ms 节流；看实时值用 `justfloat_latest`。

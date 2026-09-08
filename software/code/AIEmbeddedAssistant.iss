@@ -2,7 +2,7 @@
 ; 用法：ISCC.exe AIEmbeddedAssistant.iss（在工程根目录执行）
 
 #define MyAppName "AI嵌入式助手"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "HC"
 #define MyAppExeName "AIEmbeddedAssistant.exe"
 #define MyAppId "{{C4A2B0F8-6E1C-4D3A-9B2E-AIEmbeddedAssistant}"
@@ -17,7 +17,7 @@ DisableDirPage=no
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
-OutputDir=dist-installer
+OutputDir=..\dist\dist-installer
 OutputBaseFilename=AIEmbeddedAssistant-Setup
 SetupIconFile=logo.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
@@ -34,7 +34,7 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "jlinkdep"; Description: "本机安装 SEGGER J-Link 软件（RTT 模式需要，完成后打开官方下载页）"; GroupDescription: "外部依赖："; Flags: unchecked
 
 [Files]
-Source: "dist\AIEmbeddedAssistant\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\AIEmbeddedAssistant\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
