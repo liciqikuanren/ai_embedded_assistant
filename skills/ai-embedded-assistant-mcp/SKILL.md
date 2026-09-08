@@ -51,7 +51,16 @@ AI嵌入式助手是上位机（主机侧）调试软件：**串口/RTT 调试 +
 
 ## 2. 连接前置与 MCP 端点
 
-1. 启动软件，顶部切到目标运行模式，串口模式先 `open_port`，RTT 模式先 `rtt_connect`。
+### 2.1 启动 / 关闭软件（Agent 可直接执行）
+- 检查是否在跑：`Get-Process AIEmbeddedAssistant -ErrorAction SilentlyContinue`
+- 启动：`Start-Process "$env:AI_EMBEDDED_ASSISTANT_EXE"`；若该变量未定义，用安装路径
+  `C:\Users\HC\AppData\Local\Programs\AI嵌入式助手\AIEmbeddedAssistant.exe`（源码版：仓库 `software/code` 下 `python main.py`，配置 `~/.ai_embedded_assistant`）
+- 就绪检查：`Test-NetConnection 127.0.0.1 -Port 8765` 通了再调 MCP；GUI 里把运行模式切到目标模式
+- 关闭 / 重启：`Stop-Process -Name AIEmbeddedAssistant`，随后按需重新启动（内置 MCP 随进程起停）
+- 说明：安装版 exe 是改名前的构建（配置 `~/.serial_assistant`、`ai_push_url` 为旧地址）；要对齐改名后的
+  配置与推送地址请用源码版，或等重新打包的安装版替换后再升级
+
+1. 启动软件后，顶部切到目标运行模式，串口模式先 `open_port`，RTT 模式先 `rtt_connect`。
 2. MCP 端点：`POST http://127.0.0.1:8765/mcp`（Streamable HTTP），请求头 `Accept: application/json, text/event-stream`；
    body JSON-RPC（`{"jsonrpc":"2.0","id":N,"method":"tools/call","params":{"name":"...","arguments":{...}}}`），响应取 SSE `data:` 行 JSON 的 `result.content[].text`。
 3. 发中文/参数建议先把 JSON 写成无 BOM UTF-8 文件再 POST，避免控制台编码乱码。
