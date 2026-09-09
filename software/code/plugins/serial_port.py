@@ -11,6 +11,12 @@ from typing import Any, Callable
 import serial
 from serial.tools import list_ports
 
+# 串口接收“攒段”定界：读线程把连续到达的字节先攒起来，
+# 直到出现 \n 或停顿超过该空闲阈值，才作为“一段”广播给界面/解析器。
+# 避免固定 10ms 轮询把同一行文本（如固件 wave_names 回复）劈成多段显示。
+SERIAL_RX_IDLE_S = 0.03
+SERIAL_RX_POLL_S = 0.002
+
 
 class SerialService:
     """封装 pyserial 的串口服务，事件统一广播到 Cordis 事件总线。
@@ -140,6 +146,11 @@ class SerialService:
                 self._reconnect_delay = float(delay)
 
     def _reader_loop(self) -> None:
+        """2ms 快速轮询、每次到多少发多少（不攒段）。
+
+        注意：不能做“空闲/换行攒段”——JustFloat 是连续二进制流，
+        攒段会让帧成批到达、波形一卡一卡。文本行的跨段显示观感
+        由显示层处理（解析层按 \\n + 正则取行，不受影响）。"""
         while not self._reader_stop.is_set():
             with self._lock:
                 s = self._serial
@@ -151,8 +162,7 @@ class SerialService:
                     data = s.read(waiting)
                     if data:
                         self._emit("serial_data_received", bytes(data))
-                else:
-                    time.sleep(0.01)
+                time.sleep(SERIAL_RX_POLL_S)
             except (serial.SerialException, OSError, TypeError) as e:
                 self._log(f"串口读取异常：{e}")
                 break

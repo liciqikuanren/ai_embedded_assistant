@@ -12,6 +12,7 @@ _READONLY = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
 class JustFloatPanel(QWidget):
     toggled = pyqtSignal(bool)       # 解析开关
     reset_clicked = pyqtSignal()     # 重置解析器
+    autoname_clicked = pyqtSignal()  # 按固件查询自动命名通道（wave_names）
     renamed = pyqtSignal(dict)       # 通道重命名 {索引: 名称}
 
     def __init__(self, parent=None):
@@ -32,9 +33,13 @@ class JustFloatPanel(QWidget):
         self.stats_label.setStyleSheet("color: #9aa3ad;")
         self.reset_btn = QPushButton("重置解析器")
         self.reset_btn.setEnabled(False)
+        self.autoname_btn = QPushButton("自动命名")
+        self.autoname_btn.setToolTip("向固件查询 wave_names 并按返回的通道名自动命名（需固件支持）")
+        self.autoname_btn.setEnabled(False)
         row.addWidget(self.enable_check)
         row.addWidget(self.stats_label)
         row.addStretch(1)
+        row.addWidget(self.autoname_btn)
         row.addWidget(self.reset_btn)
         v.addLayout(row)
 
@@ -60,6 +65,7 @@ class JustFloatPanel(QWidget):
 
         self.enable_check.toggled.connect(self._on_toggled)
         self.reset_btn.clicked.connect(self.reset_clicked.emit)
+        self.autoname_btn.clicked.connect(self.autoname_clicked.emit)
         self.table.itemChanged.connect(self._on_item_changed)
 
     def _on_toggled(self, checked: bool):
@@ -81,6 +87,7 @@ class JustFloatPanel(QWidget):
         finally:
             self._applying = False
         self.reset_btn.setEnabled(enabled)
+        self.autoname_btn.setEnabled(enabled)
 
     def set_stats(self, stats: dict) -> None:
         stats = stats or {}
@@ -90,6 +97,7 @@ class JustFloatPanel(QWidget):
             f" | 异常: {stats.get('malformed', 0)}"
         )
         self.reset_btn.setEnabled(bool(stats.get("enabled", True)))
+        self.autoname_btn.setEnabled(bool(stats.get("enabled", True)))
         latest = stats.get("latest") or {}
         names = latest.get("names") or []
         values = latest.get("values") or []
@@ -135,3 +143,4 @@ class JustFloatPanel(QWidget):
         finally:
             self._applying = False
         self.reset_btn.setEnabled(bool(cfg.get("justfloat_enabled", True)))
+        self.autoname_btn.setEnabled(bool(cfg.get("justfloat_enabled", True)))

@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtGui import QFontDatabase, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
@@ -28,6 +28,11 @@ class ReceivePanel(QWidget):
         self._entries: list[tuple[str, datetime, bytes, str]] = []
         self._rx_bytes = 0
         self._tx_bytes = 0
+        self._line_open = False      # RX 文本视图：当前行未到 \r\n，等待续接
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(30)   # ~30ms 静默则封行
+        self._flush_timer.timeout.connect(self._close_open_line)
         self._build()
 
     def _build(self):
@@ -136,13 +141,60 @@ class ReceivePanel(QWidget):
         show = (direction == "RX" and self.rx_show_check.isChecked()) or \
                (direction == "TX" and self.tx_show_check.isChecked())
         if show:
-            self._insert_chunk(self.rx_text.textCursor(), direction, data, ts, source)
+            self._display_chunk(direction, data, ts, source)
             self._autoscroll()
+
+    # ---------------- 文本行合并（RX 文本视图） ----------------
+    # 传输层是裸转发：同一条逻辑文本行可能分多段到达。这里把未以 \r\n 结尾的
+    # RX 文本段续接到当前行（不重复打 ←/时间戳），遇行尾或 ~30ms 静默才换行。
+    # HEX/二进制视图保持原样整段显示。
+    def _display_chunk(self, direction: str, data: bytes, ts: datetime,
+                       source: str = "") -> None:
+        cursor = self.rx_text.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        pal = active_palette()
+        if direction == "RX" and not self.rx_hex_check.isChecked():
+            text = self._format_data(data)
+            fmt = QTextCharFormat()
+            fmt.setForeground(pal.rx)
+            if self._line_open:
+                cursor.insertText(text, fmt)          # 续接，不再重复 ←/时间戳
+            else:
+                if self.timestamp_check.isChecked():
+                    tfmt = QTextCharFormat()
+                    tfmt.setForeground(pal.ts)
+                    cursor.insertText(
+                        f"[{ts.strftime('%H:%M:%S.%f')[:-3]}] ", tfmt)
+                cursor.insertText("← ", fmt)
+                cursor.insertText(text, fmt)
+            if text.endswith(("\n", "\r")):
+                self._line_open = False
+                self._flush_timer.stop()
+            else:
+                self._line_open = True
+                self._flush_timer.start()             # ~30ms 静默封行
+            return
+        # HEX 或 TX/其他：先把未封行文本封行，再按原样整段插入
+        if self._line_open:
+            self._close_open_line()
+        self._insert_chunk(cursor, direction, data, ts, source)
+
+    def _close_open_line(self) -> None:
+        self._flush_timer.stop()
+        if self._line_open:
+            cursor = self.rx_text.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.End)
+            fmt = QTextCharFormat()
+            fmt.setForeground(active_palette().rx)
+            cursor.insertText("\n", fmt)
+            self._line_open = False
 
     def clear(self) -> None:
         self._entries.clear()
         self._rx_bytes = 0
         self._tx_bytes = 0
+        self._line_open = False
+        self._flush_timer.stop()
         self.rx_text.clear()
         self._update_counters()
 
@@ -182,6 +234,8 @@ class ReceivePanel(QWidget):
             cursor.insertText("\n", fmt_data)
 
     def _re_render(self) -> None:
+        self._line_open = False
+        self._flush_timer.stop()
         self.rx_text.setUpdatesEnabled(False)
         self.rx_text.clear()
         cursor = self.rx_text.textCursor()

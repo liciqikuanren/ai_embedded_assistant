@@ -75,12 +75,16 @@ AI嵌入式助手是上位机（主机侧）调试软件：**串口/RTT 调试 +
 - **指令**（FireWater，`serial_vofa`）：`list_commands` `send_command("temp_sw:1;temp_tar:37;")` `set_params({...})` `send_preset("闭环控制默认")`；参数名与范围会被校验
 - **配置**（全模式）：`config_status` `config_save(path)` `config_load(path)` `config_set(key,value)`（支持 `mode` 等键；**改 `mode` 或加载出不同 mode 会触发热切换：约 1~2s 后 MCP 重启、工具集随新模式刷新，响应里 `hot_switch: true` 表示已触发**）
 - **RTT**（rtt 模式）：`rtt_connect` `rtt_disconnect` `rtt_status` `shell_exec(cmd,timeout)`（响应式，等待提示符返回）`read_log(count,grep,level)`（拉取 ch2 日志）
-- **波形/录制**（vofa 模式）：`tcp_forward_start/stop/status`；`justfloat_status/enable/reset/frames/latest/rename/reset_names/apply_doc_channels`；`float_recorder_start/pause/resume/stop/status/list/set_dir/set_duration/set_sample_hz`
+- **波形/录制**（vofa 模式）：`tcp_forward_start/stop/status`；`justfloat_status/enable/reset/frames/latest/rename/reset_names/apply_doc_channels`；
+  **`justfloat_autoname`（固件通道名自动发现）**——连接后自动执行一次，也可随时手动；需固件支持 `wave_names`
+  （RTT 走 ch0 shell，串口 `serial_vofa` 走查询窗口；固件回一行 `<通道数> <名0> <名1> ...`）；
+  `float_recorder_start/pause/resume/stop/status/list/set_dir/set_duration/set_sample_hz`
 
 ## 4. 典型流程
 
 ### 4.1 RTT 固件调试（最常用，`rtt_shell`/`rtt_vofa`）
 1. `rtt_connect` → `rtt_status` 确认 shell ch0 / 波形 ch1 / 日志 ch2 已建。
+   （固件支持 `wave_names` 时连接后会自动按通道名重命名；也可手动：GUI 波形面板「自动命名」或 `justfloat_autoname`。）
 2. Shell 交互：`shell_exec("help")` 看命令；`shell_exec("<cmd> -h")` 看用法；命令以回车触发执行。
 3. 看日志：`read_log(level="ERROR")` 或 `read_log(grep="xxx")`；日志按级别着色（DEBUG/INFO/WARN/ERROR/FATAL）。
 4. 波形（`rtt_vofa`）：`justfloat_latest` 看实时通道；`justfloat_rename` 或 `justfloat_apply_doc_channels` 按文档命名；

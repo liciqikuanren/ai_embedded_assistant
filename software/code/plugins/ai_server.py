@@ -362,6 +362,26 @@ def build_server(serial, transmitter, config, log, rxbuf: RxBuffer,
             fr.set_sample_hz(hz)
             return {"ok": True, "sample_hz": fr.status()["sample_hz"]}
 
+    # ---------------- 固件通道名自动发现（wave_names 查询 → 自动重命名） ----------------
+    @mcp.tool()
+    def justfloat_autoname(timeout: float = 2.0) -> dict:
+        """查询固件波形通道名并自动重命名（需固件支持 wave_names）。
+
+        RTT 模式走 ch0 shell 查询；串口 serial_vofa 模式在查询窗口发送
+        "wave_names"，固件停发 JustFloat 回一行 "<通道数> <名0> <名1> ..."。
+        成功后自动按固件顺序重命名通道（录制 CSV 表头同步生效）。"""
+        mode = config.get("mode", "serial")
+        jf = extra.get("justfloat")
+        rtt_svc = extra.get("rtt")
+        if jf is None:
+            return {"ok": False,
+                    "message": "justfloat 服务未加载（需 rtt_vofa / serial_vofa 波形模式）"}
+
+        def tx_send_text(text: str):
+            transmitter.send(text, False, "UTF-8", True, "CRLF", source="ai")
+
+        return jf.apply_names_from_query(tx_send_text, rtt_svc, mode, float(timeout))
+
     # ---------------- RTT 工具（shell 响应式 + log 拉取式） ----------------
     rtt = extra.get("rtt")
     if rtt is not None:

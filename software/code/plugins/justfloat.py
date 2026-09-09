@@ -16,6 +16,7 @@ JustFloat 协议（小端浮点数组字节流）：
 """
 
 import asyncio
+import re
 import struct
 import threading
 import time
@@ -26,6 +27,24 @@ IMAGE_FRAME_BYTES = 7 * 4           # 图片前导帧固定 28 字节
 MAX_BUFFER = 64 * 1024              # 无帧尾时缓冲上限（防爆）
 MAX_AI_FRAMES = 500                 # AI 可读取的帧缓冲上限
 STATUS_THROTTLE = 0.25              # 状态广播节流（秒）
+
+# 固件 wave_names 回复行：<通道数> <名0> <名1> ...（可混在前导二进制残留之后，用正则定位）
+_CHANNEL_LINE_RE = re.compile(
+    r"(?:^|[^\d])(\d{1,2})((?:\s+[A-Za-z_][A-Za-z0-9_]*){1,20})\s*$",
+    re.MULTILINE,
+)
+
+
+def parse_channel_names(text: str):
+    """在任意捕获文本中查找“通道数 + 空格分隔名字”行；找不到返回 None。"""
+    m = _CHANNEL_LINE_RE.search(text or "")
+    if not m:
+        return None
+    count = int(m.group(1))
+    names = m.group(2).split()
+    if count <= 0 or len(names) != count:
+        return None
+    return count, names
 
 
 class JustFloatParser:
@@ -129,6 +148,8 @@ class JustFloatService:
         self._enabled = True
         self._parser = JustFloatParser()
         self._names: dict[int, str] = {}
+        self._query_mode = False        # 通道名查询捕获中（串口：文本行暂存，不喂解析器）
+        self._query_buf = bytearray()   # 查询回复文本缓冲
         saved = (config.get("justfloat_channel_names") or {}) if config else {}
         if isinstance(saved, dict):
             for k, v in saved.items():
@@ -160,9 +181,96 @@ class JustFloatService:
 
     def feed(self, data: bytes) -> list[dict]:
         with self._lock:
-            if not self._enabled or not data:
+            if not data:
+                return []
+            if self._query_mode:
+                # 通道名查询捕获：文本行不进 JustFloat 解析器，取到换行后由 query_poll 交付
+                self._query_buf.extend(bytes(data))
+                return []
+            if not self._enabled:
                 return []
             return self._parser.feed(data)
+
+    # ---------------- 固件通道名查询捕获（wave_names） ----------------
+    def query_begin(self) -> None:
+        """进入查询捕获模式：后续接收字节先存文本缓冲，不喂解析器。"""
+        with self._lock:
+            self._query_buf.clear()
+            self._query_mode = True
+
+    def query_snapshot(self) -> str:
+        """当前已捕获的全部文本（不结束捕获，供正则定位名字行）。"""
+        with self._lock:
+            return bytes(self._query_buf).decode("utf-8", "replace")
+
+    def query_stop(self) -> None:
+        """结束查询捕获：清缓冲并恢复正常解析。"""
+        with self._lock:
+            self._query_mode = False
+            self._query_buf.clear()
+
+    def query_abort(self) -> None:
+        self.query_stop()
+
+    def apply_names_from_query(self, tx_send, rtt_svc, mode: str,
+                               timeout: float = 2.0) -> dict:
+        """查询固件通道名并自动重命名（需固件支持 wave_names）。
+
+        tx_send: 串口文本发送 callable(text)（发送一行 "wave_names"）；mode='serial_vofa' 时用
+        rtt_svc: rtt 服务（mode rtt_shell/rtt_vofa 时用 shell 查询）
+        解析采用正则在整个回复文本中定位“通道数 + 空格分隔名字”行，
+        容忍查询窗口前混入的 JustFloat 二进制残留。
+        返回 {"ok", "count", "names"} 或错误。
+        """
+        parsed: tuple[int, list[str]] | None = None
+        last_text = ""
+        try:
+            if mode in ("rtt_shell", "rtt_vofa"):
+                if rtt_svc is None:
+                    return {"ok": False, "message": "RTT 服务未就绪"}
+                resp = rtt_svc.exec_shell("wave_names", timeout)
+                if not (resp or {}).get("ok"):
+                    return {"ok": False,
+                            "message": (resp or {}).get("message") or "RTT 查询失败（固件支持 wave_names？）"}
+                last_text = str((resp or {}).get("output") or "")
+                parsed = parse_channel_names(last_text)
+            elif mode == "serial_vofa":
+                if tx_send is None:
+                    return {"ok": False, "message": "串口发送服务未就绪"}
+                self.query_begin()
+                try:
+                    tx_send("wave_names")
+                except Exception as e:  # noqa: BLE001
+                    self.query_stop()
+                    return {"ok": False, "message": f"查询发送失败：{e}"}
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    last_text = self.query_snapshot()
+                    parsed = parse_channel_names(last_text)
+                    if parsed is not None:
+                        break
+                    time.sleep(0.05)
+                self.query_stop()
+                if parsed is None:
+                    return {"ok": False,
+                            "message": f"查询超时/无法解析通道名：{last_text!r}"}
+            else:
+                return {"ok": False,
+                        "message": f"当前模式 {mode} 不支持波形通道名查询（需 rtt_* 或 serial_vofa）"}
+        except Exception as e:  # noqa: BLE001
+            self.query_abort()
+            return {"ok": False, "message": f"查询失败：{e}"}
+
+        if parsed is None:
+            return {"ok": False, "message": f"通道名回复无法解析：{last_text!r}"}
+        count, names = parsed
+
+        # 清掉查询窗口可能混入的残留字节，再按固件通道名重命名
+        self.reset()
+        self.rename({str(i): n for i, n in enumerate(names)})
+        self._log(f"已按固件自动命名 {count} 个通道：{' '.join(names)}")
+        return {"ok": True, "count": count, "names": names,
+                "message": "已按固件自动命名通道"}
 
     def stats(self) -> dict:
         with self._lock:

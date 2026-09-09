@@ -2,6 +2,7 @@
 
 import asyncio
 import csv
+import threading
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, QTimer
@@ -52,6 +53,7 @@ class SerialController(QObject):
         tc.settings_changed.connect(self._persist_settings)
         jf.toggled.connect(self._on_justfloat_toggled)
         jf.reset_clicked.connect(self._on_justfloat_reset)
+        jf.autoname_clicked.connect(self._on_justfloat_autoname)
         jf.renamed.connect(self._on_justfloat_renamed)
         fr.start_clicked.connect(self._on_recorder_start)
         fr.pause_clicked.connect(self._on_recorder_pause)
@@ -356,6 +358,11 @@ class SerialController(QObject):
             self._w.show_error(f"连接 J-Link 失败：{err}")
         else:
             self._w.show_message("已连接 J-Link RTT")
+            jf = self._svc("justfloat")
+            cfg = self._svc("config")
+            mode = cfg.get("mode", "serial") if cfg is not None else "serial"
+            if jf is not None and mode in ("rtt_vofa", "rtt_shell"):
+                self._request_autoname()  # RTT 连接后自动查询固件通道名
 
     def _on_rtt_send(self, cmd: str):
         rtt = self._svc("rtt")
@@ -387,6 +394,38 @@ class SerialController(QObject):
     def _on_justfloat_status(self, stats):
         # 表格（通道名 + 最新值）由节流后的状态事件刷新（10ms 帧下避免高频 UI 更新）
         self._w.justfloat.set_stats(stats)
+
+    # ---------------- 固件通道名自动发现（wave_names → 自动命名） ----------------
+    def _on_justfloat_autoname(self):
+        jf = self._svc("justfloat")
+        if jf is None:
+            self._w.show_error("justfloat 服务未加载（需 rtt_vofa / serial_vofa 波形模式）")
+            return
+        cfg = self._svc("config")
+        mode = cfg.get("mode", "serial") if cfg is not None else "serial"
+        tx = self._svc("transmitter")
+        rtt = self._svc("rtt")
+
+        def tx_send(text: str):
+            if tx is None:
+                raise RuntimeError("发送服务未就绪")
+            tx.send(text, False, "UTF-8", True, "CRLF", source="ai")
+
+        def worker():
+            try:
+                result = jf.apply_names_from_query(tx_send, rtt, mode, 2.0)
+            except Exception as e:  # noqa: BLE001
+                result = {"ok": False, "message": f"自动命名失败：{e}"}
+            if result.get("ok"):
+                self._b.log.emit(f"已按固件自动命名 {result.get('count', 0)} 个通道")
+            else:
+                self._b.log.emit(f"[自动命名] {result.get('message') or '失败'}")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _request_autoname(self):
+        """连接成功后自动查询一次（延迟，等数据链路稳定）。"""
+        QTimer.singleShot(800, self._on_justfloat_autoname)
 
     # ---------------- 浮点录制 ----------------
     def _on_recorder_start(self, duration: int, hz: float):
@@ -538,6 +577,11 @@ class SerialController(QObject):
             self._w.settings.set_connected(True)
             self._w.set_state(f"已连接 {info.get('port', '')} @ {info.get('baudrate', '')}")
             self._w.show_message(f"已连接 {info.get('port', '')}")
+            jf = self._svc("justfloat")
+            cfg = self._svc("config")
+            mode = cfg.get("mode", "serial") if cfg is not None else "serial"
+            if jf is not None and mode == "serial_vofa":
+                self._request_autoname()  # 串口+波形连接后自动查询固件通道名
         elif name == "closed":
             self._stop_cycle_ui()
             self._w.settings.set_connected(False)
