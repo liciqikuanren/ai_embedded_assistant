@@ -68,6 +68,8 @@ DEFAULTS = {
     "rtt_shell_channel": 0,
     "rtt_wave_channel": 1,
     "rtt_log_channel": 2,
+    # 兼容保留：RTT ch1 现按标准 JustFloat（帧尾 {00 00 80 7F}）解析，通道数随帧自动变化，
+    # 不再按固定通道数切帧（旧值仅对旧版固件/旧行为兼容）。
     "rtt_wave_channels": 8,
     "rtt_shell_prompt": "HC_dqj@root:",
     # JLinkARM.dll 显式路径（留空 = 自动搜索 EIDE 自带 / SEGGER 标准安装）

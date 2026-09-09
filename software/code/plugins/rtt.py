@@ -1,7 +1,8 @@
 """RTT 插件：提供 rtt 服务（pylink 连接 J-Link，轮询 RTT ch0/ch1/ch2）。
 
 - ch0 = shell 终端（上/下行，事件 rtt_shell_rx）；
-- ch1 = 波形（float 帧 → 追加 justfloat 尾 → 事件 rtt_wave）；
+- ch1 = 波形（标准 JustFloat 字节流：float×N 小端 + 帧尾 {00 00 80 7F}，事件 rtt_wave 原样透传，
+  由 justfloat 服务按帧尾解析，通道数随帧自动变化）；
 - ch2 = 设备日志（事件 rtt_log）。
 - pylink 为阻塞库，读轮询跑在独立线程；事件经 run_coroutine_threadsafe 广播。
 - 未安装 pylink 时降级：connect() 返回错误，不影响程序启动。
@@ -21,9 +22,6 @@ except ImportError:  # pragma: no cover
     pylink = None
     JLinkInterfaces = None
     Library = None
-
-# justfloat 帧尾（小端 0x7F800000 = +inf），与 plugins/justfloat.py 一致
-JUSTFLOAT_TAIL = b"\x00\x00\x80\x7f"
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -69,7 +67,6 @@ class RttService:
         self._reader: threading.Thread | None = None
         self._reader_stop = threading.Event()
         self._connected = False
-        self._wave_buf = bytearray()
         self._shell_buf = bytearray()   # shell 响应缓冲（exec_shell 轮询）
         self._log_buf = bytearray()     # 日志环形缓冲（read_log 拉取）
         self._log_max = 64 * 1024
@@ -131,7 +128,6 @@ class RttService:
 
                 self._jlink = jlink
                 self._connected = True
-                self._wave_buf.clear()
                 self._reader_stop.clear()
                 self._reader = threading.Thread(
                     target=self._reader_loop, name="rtt-reader", daemon=True
@@ -238,8 +234,6 @@ class RttService:
         ch_shell = int(self._config.get("rtt_shell_channel", 0) or 0)
         ch_wave = int(self._config.get("rtt_wave_channel", 1) or 1)
         ch_log = int(self._config.get("rtt_log_channel", 2) or 2)
-        wave_n = max(1, int(self._config.get("rtt_wave_channels", 8) or 8))
-        frame_size = wave_n * 4
         prompt = (self._config.get("rtt_shell_prompt", "") or "").encode("utf-8")
         recent = bytearray()
 
@@ -262,13 +256,9 @@ class RttService:
 
                     data = jlink.rtt_read(ch_wave, 256)
                     if data:
-                        self._wave_buf.extend(data)
-                        while len(self._wave_buf) >= frame_size:
-                            frame = bytes(self._wave_buf[:frame_size]) + JUSTFLOAT_TAIL
-                            del self._wave_buf[:frame_size]
-                            self._emit("rtt_wave", frame)
-                        if len(self._wave_buf) > 4096:
-                            del self._wave_buf[: len(self._wave_buf) - 4096]
+                        # 标准 JustFloat：帧尾定界（{00 00 80 7F}）、通道数随帧变化。
+                        # 原样透传，justfloat 服务按帧尾解析；TCP/VoFA 客户端同流接收。
+                        self._emit("rtt_wave", bytes(data))
 
                     data = jlink.rtt_read(ch_log, 256)
                     if data:
