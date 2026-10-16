@@ -1,0 +1,15 @@
+# ai-embedded-bridge bundle patch.
+#
+# One insert over the profile root; the profile's own cordis.patch.yml can
+# address the row afterwards by its id. The row `name` is the package name,
+# which dsh resolves relative to this package's own directory, so it stays
+# correct wherever the profile installs the bundle.
+#
+# This plugin only needs the web profile: it registers HTTP routes on
+# `webServer` and taps index.html for its floating panel. On a profile without
+# `webServer` the plugin loads and waits (its `ctx.inject(['webServer'], …)`
+# never runs), which is why no `disabled:` is set here.
+
+- insert:
+    - id: ai-embedded-bridge
+      name: ai-embedded-bridge

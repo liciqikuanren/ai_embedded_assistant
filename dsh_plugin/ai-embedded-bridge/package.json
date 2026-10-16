@@ -1,20 +1,43 @@
 {
   "name": "ai-embedded-bridge",
   "version": "0.1.0",
-  "description": "DSH 串口桥插件：接收AI嵌入式助手推送的数据，注入当前 Agent 会话（聊天/监听两种模式）",
+  "description": "DSH bundle that injects data pushed by the AI Embedded Assistant desktop debug tool into a live agent session, and adds a floating off/chat/monitor panel to the DSH web UI.",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
-    "lib/index.js"
+    "lib/index.js",
+    "cordis.patch.yml",
+    "README.md"
   ],
-  "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.7",
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.7",
-    "@deepseek-ai/cordis": "^4.0.1"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/liciqikuanren/ai_embedded_assistant.git",
+    "directory": "dsh_plugin/ai-embedded-bridge"
   },
-  "license": "MIT"
+  "homepage": "https://github.com/liciqikuanren/ai_embedded_assistant/tree/main/dsh_plugin/ai-embedded-bridge",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "serial",
+    "rtt",
+    "embedded",
+    "debug"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-llm": ">=0.1.0-rc.7 <0.2.0-0 || >=0.1.1-rc.1 <0.2.0-0 || >=0.1.2-rc.1 <0.2.0-0 || >=0.1.3-rc.1 <0.2.0-0 || >=0.1.4-rc.1 <0.2.0-0 || >=0.1.5-rc.1 <0.2.0-0 || >=0.1.6-rc.1 <0.2.0-0 || >=0.1.7-rc.1 <0.2.0-0 || >=0.1.8-rc.1 <0.2.0-0 || >=0.1.9-rc.1 <0.2.0-0",
+    "@deepseek-ai/dsh-session-title": ">=0.1.0-rc.7 <0.2.0-0 || >=0.1.1-rc.1 <0.2.0-0 || >=0.1.2-rc.1 <0.2.0-0 || >=0.1.3-rc.1 <0.2.0-0 || >=0.1.4-rc.1 <0.2.0-0 || >=0.1.5-rc.1 <0.2.0-0 || >=0.1.6-rc.1 <0.2.0-0 || >=0.1.7-rc.1 <0.2.0-0 || >=0.1.8-rc.1 <0.2.0-0 || >=0.1.9-rc.1 <0.2.0-0"
+  }
 }

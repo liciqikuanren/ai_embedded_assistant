@@ -11,6 +11,13 @@ build/
 csv_floder/*.csv
 software/code/csv_floder/*.csv
 
+# 本地装 DSH 插件用的 tgz（dsh_plugin/ai-embedded-bridge 的 pnpm pack 产物）
+#
+# 别删：profile 里那条依赖是 file:<这个路径>，删了之后在该 profile 跑任何
+# pnpm install / dsh plugin add 都会因为解析不到这个文件而失败。
+# 不存在了就重新生成： cd dsh_plugin/ai-embedded-bridge && pnpm pack --pack-destination ../../.local-dist
+.local-dist/
+
 # IDE / 系统
 .vscode/
 .idea/
