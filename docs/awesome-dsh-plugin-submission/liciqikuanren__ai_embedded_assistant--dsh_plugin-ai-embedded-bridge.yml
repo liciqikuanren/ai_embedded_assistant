@@ -1,0 +1,6 @@
+url: https://github.com/liciqikuanren/ai_embedded_assistant/tree/main/dsh_plugin/ai-embedded-bridge
+name: liciqikuanren/ai_embedded_assistant#ai-embedded-bridge
+category: session
+description:
+  en: Bridges the AI Embedded Assistant serial/RTT debug tool into a live dsh session — device data pushed over HTTP is injected into a chosen agent session, with a floating off/chat/monitor panel in the web UI.
+  zh: 把 AI嵌入式助手 的串口/RTT 调试工具接进 dsh 会话——上位机经 HTTP 推送的设备数据注入指定 Agent 会话，Web UI 右下角提供「关闭/聊天/监听」悬浮面板。
