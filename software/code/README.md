@@ -65,7 +65,7 @@ $env:AUTO_QUIT_MS=3000; python main.py
 
 ## AI 操作指南（Skill）
 
-`../../skills/ai-embedded-assistant-mcp/SKILL.md` 收录了通过 MCP 接口操作本程序的经验：
+`../../skills/ai-embedded-assistant/SKILL.md` 收录了通过 MCP 接口操作本程序的经验：
 连接方式、调试模式 AI 能力边界、标准操作流程（通道命名 → 发指令 → 录制观察）、
 温度 PID 调参实测结论（推荐 `kp=12, ki=0, kd=2`，温差 20°C 阶跃 0.68s 到达、超调 1.8°C）
 与常见坑（`temp_kd` 是执行器阻尼非微分项、积分饱和、忘发 `temp_sw:1` 等）。
