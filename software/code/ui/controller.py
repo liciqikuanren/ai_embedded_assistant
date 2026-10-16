@@ -355,13 +355,17 @@ class SerialController(QObject):
             return
         ok, err = rtt.connect()
         if not ok:
-            self._w.show_error(f"连接 J-Link 失败：{err}")
+            self._w.show_error(f"连接 RTT 失败：{err}")
         else:
-            self._w.show_message("已连接 J-Link RTT")
+            st = rtt.status() or {}
+            label = st.get("probe_name") or "调试器"
+            detail = st.get("detail") or ""
+            self._w.show_message(f"已连接 RTT：{label} {detail}".strip())
             jf = self._svc("justfloat")
             cfg = self._svc("config")
             mode = cfg.get("mode", "serial") if cfg is not None else "serial"
-            if jf is not None and mode in ("rtt_vofa", "rtt_shell"):
+            auto = bool(cfg.get("justfloat_autoname_on_connect", True)) if cfg is not None else True
+            if auto and jf is not None and mode in ("rtt_vofa", "rtt_shell"):
                 self._request_autoname()  # RTT 连接后自动查询固件通道名
 
     def _on_rtt_send(self, cmd: str):
@@ -580,7 +584,8 @@ class SerialController(QObject):
             jf = self._svc("justfloat")
             cfg = self._svc("config")
             mode = cfg.get("mode", "serial") if cfg is not None else "serial"
-            if jf is not None and mode == "serial_vofa":
+            auto = bool(cfg.get("justfloat_autoname_on_connect", True)) if cfg is not None else True
+            if auto and jf is not None and mode == "serial_vofa":
                 self._request_autoname()  # 串口+波形连接后自动查询固件通道名
         elif name == "closed":
             self._stop_cycle_ui()

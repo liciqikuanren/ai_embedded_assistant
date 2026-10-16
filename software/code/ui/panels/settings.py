@@ -2,7 +2,7 @@
 
 - 「串口连接」：端口/波特率/高级参数/打开串口（仅带串口的模式显示）；
 - 「AI 联动」：数据推送到 DSH + MCP 服务状态（串口与 RTT 模式均显示）；
-- 「RTT / J-Link 设置」：芯片/接口/速度/序列号（仅 RTT 模式显示）。
+- 「RTT / 调试探针设置」：探针(J-Link/DAPLink)/接口/速度/序列号/控制块地址（仅 RTT 模式显示）。
 
 运行模式选择移到窗口顶部工具条；配置文件加载/保存移到顶部「设置」菜单。
 """
@@ -139,28 +139,63 @@ class SettingsPanel(QWidget):
         ai_row.addWidget(self.ai_status_label)
         ai_row.addStretch(1)
 
-        # ================= 「RTT / J-Link 设置」（仅 RTT 模式） =================
-        rtt_group = QGroupBox("RTT / J-Link 设置")
+        # ================= 「RTT / 调试探针设置」（仅 RTT 模式） =================
+        rtt_group = QGroupBox("RTT / 调试探针设置")
         rtt_grid = QGridLayout(rtt_group)
         rtt_grid.setContentsMargins(10, 8, 8, 8)
         rtt_grid.setHorizontalSpacing(6)
         rtt_grid.setVerticalSpacing(6)
-        self.rtt_chip_edit = QLineEdit("STM32H743XI")
-        self.rtt_chip_edit.setPlaceholderText("芯片型号，如 STM32H743XI")
+
+        self.rtt_probe_combo = QComboBox()
+        self.rtt_probe_combo.addItem("J-Link (pylink)", "jlink")
+        self.rtt_probe_combo.addItem("DAPLink / CMSIS-DAP (pyOCD)", "dap")
+        self.rtt_probe_combo.setToolTip(
+            "RTT 与探针无关（控制块在目标 RAM），两种探针都能用：\n"
+            "J-Link 走 SEGGER pylink；DAPLink/任意 CMSIS-DAP 走 pyOCD。"
+        )
+
         self.rtt_iface_combo = QComboBox()
         self.rtt_iface_combo.addItems(["SWD", "JTAG"])
+
+        self.rtt_chip_edit = QLineEdit("STM32H743XI")
+        self.rtt_chip_edit.setPlaceholderText("J-Link 芯片型号，如 STM32H743XI")
         self.rtt_speed_edit = QLineEdit("4000")
         self.rtt_speed_edit.setPlaceholderText("接口速度 kHz")
         self.rtt_serial_edit = QLineEdit("")
-        self.rtt_serial_edit.setPlaceholderText("序列号（留空=自动）")
-        rtt_grid.addWidget(QLabel("芯片"), 0, 0)
-        rtt_grid.addWidget(self.rtt_chip_edit, 0, 1)
+        self.rtt_serial_edit.setPlaceholderText("序列号 / DAPLink UID（留空=自动）")
+        self.rtt_cb_edit = QLineEdit("")
+        self.rtt_cb_edit.setPlaceholderText("RTT 控制块地址（可空，如 0x24006ef8）")
+
+        self.rtt_dll_edit = QLineEdit("")
+        self.rtt_dll_edit.setPlaceholderText("JLink_x64.dll（留空=自动搜索 EIDE/SEGGER）")
+        self.rtt_dap_target_edit = QLineEdit("stm32h743xx")
+        self.rtt_dap_target_edit.setPlaceholderText("pyOCD 目标名，如 stm32h743xx")
+        self.rtt_dap_elf_edit = QLineEdit("")
+        self.rtt_dap_elf_edit.setPlaceholderText("固件 .axf/.elf（解析 _SEGGER_RTT，留空=扫描 RAM）")
+
+        self._rtt_chip_label = QLabel("芯片")
+        self._rtt_dll_label = QLabel("J-Link DLL")
+        self._rtt_dap_target_label = QLabel("pyOCD目标")
+        self._rtt_dap_elf_label = QLabel("固件 ELF")
+
+        rtt_grid.addWidget(QLabel("探针"), 0, 0)
+        rtt_grid.addWidget(self.rtt_probe_combo, 0, 1)
         rtt_grid.addWidget(QLabel("接口"), 0, 2)
         rtt_grid.addWidget(self.rtt_iface_combo, 0, 3)
-        rtt_grid.addWidget(QLabel("速度(kHz)"), 1, 0)
-        rtt_grid.addWidget(self.rtt_speed_edit, 1, 1)
-        rtt_grid.addWidget(QLabel("序列号"), 1, 2)
-        rtt_grid.addWidget(self.rtt_serial_edit, 1, 3)
+        rtt_grid.addWidget(self._rtt_chip_label, 1, 0)
+        rtt_grid.addWidget(self.rtt_chip_edit, 1, 1)
+        rtt_grid.addWidget(QLabel("速度(kHz)"), 1, 2)
+        rtt_grid.addWidget(self.rtt_speed_edit, 1, 3)
+        rtt_grid.addWidget(QLabel("序列号"), 2, 0)
+        rtt_grid.addWidget(self.rtt_serial_edit, 2, 1)
+        rtt_grid.addWidget(QLabel("控制块地址"), 2, 2)
+        rtt_grid.addWidget(self.rtt_cb_edit, 2, 3)
+        rtt_grid.addWidget(self._rtt_dll_label, 3, 0)
+        rtt_grid.addWidget(self.rtt_dll_edit, 3, 1, 1, 3)
+        rtt_grid.addWidget(self._rtt_dap_target_label, 3, 0)
+        rtt_grid.addWidget(self.rtt_dap_target_edit, 3, 1)
+        rtt_grid.addWidget(self._rtt_dap_elf_label, 3, 2)
+        rtt_grid.addWidget(self.rtt_dap_elf_edit, 3, 3)
         rtt_grid.setColumnStretch(1, 1)
         rtt_grid.setColumnStretch(3, 1)
 
@@ -181,10 +216,16 @@ class SettingsPanel(QWidget):
         self.rtt_iface_combo.currentTextChanged.connect(self._on_param_changed)
         self.rtt_speed_edit.textChanged.connect(self._on_param_changed)
         self.rtt_serial_edit.textChanged.connect(self._on_param_changed)
+        self.rtt_cb_edit.textChanged.connect(self._on_param_changed)
+        self.rtt_dll_edit.textChanged.connect(self._on_param_changed)
+        self.rtt_dap_target_edit.textChanged.connect(self._on_param_changed)
+        self.rtt_dap_elf_edit.textChanged.connect(self._on_param_changed)
+        self.rtt_probe_combo.currentIndexChanged.connect(self._on_probe_changed)
 
         self._serial_group = serial_group
         self._ai_group = ai_group
         self._rtt_group = rtt_group
+        self._update_probe_ui()   # 初始按默认探针显示字段
 
     def _on_advanced_toggled(self, checked: bool):
         self.advanced_widget.setVisible(checked)
@@ -202,6 +243,21 @@ class SettingsPanel(QWidget):
     def _on_ai_push_changed(self, *args):
         if not self._applying:
             self.params_changed.emit()
+
+    def _on_probe_changed(self, *args):
+        self._update_probe_ui()
+        self._on_param_changed()
+
+    def _update_probe_ui(self) -> None:
+        """按所选探针显隐专属字段（J-Link：芯片/DLL；DAPLink：pyOCD 目标/固件 ELF）。"""
+        is_dap = (self.rtt_probe_combo.currentData() or "jlink") == "dap"
+        for w in (self._rtt_chip_label, self.rtt_chip_edit):
+            w.setVisible(not is_dap)
+        for w in (self._rtt_dll_label, self.rtt_dll_edit):
+            w.setVisible(not is_dap)
+        for w in (self._rtt_dap_target_label, self.rtt_dap_target_edit,
+                  self._rtt_dap_elf_label, self.rtt_dap_elf_edit):
+            w.setVisible(is_dap)
 
     # ---------------- 按运行模式显隐分组 ----------------
     def set_mode_ui(self, mode: str) -> None:
@@ -316,6 +372,14 @@ class SettingsPanel(QWidget):
                 self.rtt_iface_combo.setCurrentIndex(idx)
             self.rtt_speed_edit.setText(str(cfg.get("rtt_speed", 4000)))
             self.rtt_serial_edit.setText(str(cfg.get("rtt_serial_no", "")))
+            self.rtt_cb_edit.setText(str(cfg.get("rtt_control_block_addr", "")))
+            self.rtt_dll_edit.setText(str(cfg.get("rtt_jlink_dll", "")))
+            self.rtt_dap_target_edit.setText(str(cfg.get("rtt_dap_target", "stm32h743xx")))
+            self.rtt_dap_elf_edit.setText(str(cfg.get("rtt_dap_elf", "")))
+            idx = self.rtt_probe_combo.findData(str(cfg.get("rtt_probe", "jlink")))
+            if idx >= 0:
+                self.rtt_probe_combo.setCurrentIndex(idx)
+            self._update_probe_ui()
         finally:
             self._applying = False
 
@@ -351,10 +415,15 @@ class SettingsPanel(QWidget):
             "auto_reconnect": self.reconnect_enabled(),
             "ai_push_enabled": self.ai_push_check.isChecked(),
             "ai_push_mode": self.ai_push_mode_combo.currentData() or "chat",
+            "rtt_probe": self.rtt_probe_combo.currentData() or "jlink",
             "rtt_chip": self.rtt_chip_edit.text().strip() or "STM32H743XI",
             "rtt_interface": self.rtt_iface_combo.currentText(),
             "rtt_speed": self.rtt_speed_edit.text().strip() or "4000",
             "rtt_serial_no": self.rtt_serial_edit.text().strip(),
+            "rtt_control_block_addr": self.rtt_cb_edit.text().strip(),
+            "rtt_jlink_dll": self.rtt_dll_edit.text().strip(),
+            "rtt_dap_target": self.rtt_dap_target_edit.text().strip() or "stm32h743xx",
+            "rtt_dap_elf": self.rtt_dap_elf_edit.text().strip(),
         }
 
     @staticmethod

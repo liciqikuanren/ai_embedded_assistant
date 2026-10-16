@@ -1,6 +1,6 @@
-"""RTT 控制台面板：Shell 交互 + 设备日志显示 + J-Link 连接控制。
+"""RTT 控制台面板：Shell 交互 + 设备日志显示 + 调试探针（J-Link/DAPLink）连接控制。
 
-- 顶部：连接/断开 J-Link 按钮 + 状态标签；
+- 顶部：连接/断开 RTT 按钮 + 状态标签；
 - 中部：统一输出框（Shell 与 Log 混排，可分别勾选显示，ANSI 已剥离）；
 - 底部：Shell 输入行（回车发送 \\r，↑↓ 命令历史）。
 """
@@ -90,7 +90,7 @@ class RttPanel(QWidget):
 
         # ---- 顶部：连接控制 ----
         top = QHBoxLayout()
-        self.connect_btn = QPushButton("连接 J-Link")
+        self.connect_btn = QPushButton("连接 RTT")
         self.connect_btn.setObjectName("OpenButton")
         self.status_label = QLabel("未连接")
         self.status_label.setStyleSheet("color: #888;")
@@ -300,7 +300,7 @@ class RttPanel(QWidget):
 
     # ---------------- 状态 ----------------
     def set_connected(self, connected: bool, info: str = "") -> None:
-        self.connect_btn.setText("断开 J-Link" if connected else "连接 J-Link")
+        self.connect_btn.setText("断开 RTT" if connected else "连接 RTT")
         self.status_label.setText(info or ("已连接" if connected else "未连接"))
         self.status_label.setStyleSheet(
             "color: #4caf50;" if connected else "color: #888;"
@@ -309,8 +309,12 @@ class RttPanel(QWidget):
     def set_status(self, status: dict) -> None:
         status = status or {}
         connected = bool(status.get("connected"))
-        chip = status.get("chip", "")
-        self.set_connected(connected, f"已连接 {chip}" if connected and chip else "")
+        if connected:
+            name = status.get("probe_name") or ""
+            detail = status.get("detail") or status.get("chip") or ""
+            self.set_connected(True, f"已连接 {name} {detail}".strip())
+        else:
+            self.set_connected(False, "")
 
     # ---------------- 配置 ----------------
     def apply_config(self, cfg: dict) -> None:

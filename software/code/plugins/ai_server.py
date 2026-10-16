@@ -388,19 +388,20 @@ def build_server(serial, transmitter, config, log, rxbuf: RxBuffer,
 
         @mcp.tool()
         def rtt_connect() -> dict:
-            """连接 J-Link 并启动 RTT（shell ch0 / 波形 ch1 / 日志 ch2）。"""
+            """连接调试探针（配置 rtt_probe：jlink=J-Link / dap=DAPLink）并启动 RTT
+            （shell ch0 / 波形 ch1 / 日志 ch2）。"""
             ok, err = rtt.connect()
             return {"ok": ok, "message": err or "已连接"}
 
         @mcp.tool()
         def rtt_disconnect() -> dict:
-            """断开 J-Link RTT 连接。"""
+            """断开 RTT 连接（J-Link 或 DAPLink）。"""
             rtt.disconnect()
             return {"ok": True, "message": "已断开"}
 
         @mcp.tool()
         def rtt_status() -> dict:
-            """查询 RTT 连接状态。"""
+            """查询 RTT 连接状态（含探针类型 / 目标 / 控制块地址）。"""
             return rtt.status()
 
         @mcp.tool()

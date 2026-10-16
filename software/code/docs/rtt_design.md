@@ -1,10 +1,10 @@
-# RTT 集成设计文档（J-Link RTT → AI嵌入式助手）
+# RTT 集成设计文档（J-Link / DAPLink RTT → AI嵌入式助手）
 
 > 状态：已定稿。本文是固件（HC_CPB）与主机（ai_embedded_assistant）双侧改造的对照基准。
 
 ## 1. 目标
 
-在现有AI嵌入式助手基础上，加入 J-Link RTT 通道，实现：
+在现有AI嵌入式助手基础上，加入 RTT 通道（探针可选 J-Link 或 DAPLink/CMSIS-DAP），实现：
 
 1. **RTT Shell**（下位机 `nr_micro_shell` 已跑在 RTT ch0）；
 2. **波形通道**（下位机把 justfloat 帧写进 RTT ch1）→ 主机经 TCP 转发给 VoFA；
@@ -17,8 +17,8 @@
 |---|---|---|---|---|---|---|---|
 | 1 | 串口交互（默认） | 串口 | 串口控制台（RX/TX）+ SendPanel | ✗ | 串口 justfloat | 串口命令 | — |
 | 2 | 串口 + TCP VoFA 转发 | 串口 | 串口控制台 + SendPanel | ✓ | 串口 justfloat | 串口命令 | — |
-| 3 | RTT Shell 交互 | J-Link | RTT控制台（Shell/Log）+ Shell输入行 | ✗ | 无 | RTT ch0（`shell_exec`） | RTT ch2（`read_log`） |
-| 4 | RTT Shell + 波形 + TCP VoFA | J-Link | RTT控制台 + Shell输入行 | ✓ | RTT ch1 波形 | RTT ch0（`shell_exec`） | RTT ch2（`read_log`） |
+| 3 | RTT Shell 交互 | J-Link / DAPLink | RTT控制台（Shell/Log）+ Shell输入行 | ✗ | 无 | RTT ch0（`shell_exec`） | RTT ch2（`read_log`） |
+| 4 | RTT Shell + 波形 + TCP VoFA | J-Link / DAPLink | RTT控制台 + Shell输入行 | ✓ | RTT ch1 波形 | RTT ch0（`shell_exec`） | RTT ch2（`read_log`） |
 
 - 默认模式为 1（串口交互）。
 - **AI 连接是独立可选开关**，与四态模式正交。
@@ -31,9 +31,9 @@
    RTT ch1 (wave)   ←    justfloat 帧（float[] + 尾 00 00 80 7F）
    RTT ch2 (log)    ←    LOG_INFO/DEBUG...（按级别）
 
-        │ J-Link (SWD)                │ 串口 (UART)
+        │ 探针 (SWD): J-Link/DAPLink  │ 串口 (UART)
         ▼                              ▼
-   主机 rtt 插件 (pylink 独立线程)     主机 serial 插件
+  主机 rtt 插件(pylink/pyOCD 独立线程)  主机 serial 插件
         │ ch0/ch1/ch2 轮询             │
         ▼                              ▼
    事件总线 (cordis ctx) ────────► UI 桥 (bridge) ──► 控制台
@@ -66,9 +66,16 @@
 
 ### 5.2 rtt 插件（`plugins/rtt.py`）
 - 提供 `rtt` 服务：`connect()` / `disconnect()` / `send_shell(cmd)` / `read_shell()` / `read_log()` / `read_wave()` / 状态。
-- pylink 在**独立线程**运行（阻塞库），轮询 ch0/ch1/ch2，经 `ctx.emit` 上抛：`rtt_shell_rx` / `rtt_log` / `rtt_wave`。
-- `rtt_start()` 定位控制块（优先 map/ELF 符号，其次手填地址）。
+- **探针抽象**：`_JLinkProbe`（pylink）/ `_DapProbe`（pyOCD）实现同一套 `read/write/close`，由配置 `rtt_probe` 选择。
+- 探针库在**独立线程**运行（阻塞），轮询 ch0/ch1/ch2，经 `ctx.emit` 上抛：`rtt_shell_rx` / `rtt_log` / `rtt_wave`。
 - 下行写 ch0 追加 `\r`（见 §7）。
+
+#### 5.2.1 DAPLink 侧（pyOCD）
+- `ConnectHelper.get_all_connected_probes` → 优先 CMSIS-DAP/DAPLink → `Session(connect_mode="attach")`（**不 halt 目标**）。
+- RTT 控制块定位顺序：`rtt_control_block_addr` 精确地址 → `rtt_dap_elf` 解析 `_SEGGER_RTT` → 在 `rtt_cb_search_addr/size`（留空＝STM32H7 常用 RAM 区）扫描 `SEGGER RTT` 标志。
+- 不用 pyOCD 的 `RTTControlBlock.start()` 自动搜索：0.39 的字节级扫描在 32B 窗口内步进错位，且内置 H743 内存映射不含 AXI SRAM，自动搜索会落空；改为先由 ELF/扫描拿到**精确地址**再 `from_target(address=...)`。
+- 下行写入自实现重试（pyOCD `blocking=True` 返回 None 且满缓冲会死循环）。
+- **无需改固件**：RTT 是目标 RAM 里的控制块+环形缓冲，任何能读写目标内存的调试器都能用（见 §4 固件侧无需改动）。
 
 ### 5.3 波形 TCP 转发（主机为服务端）
 - 新增 `vofa_server` 服务（或扩展 `tcp_forward`）：`asyncio.start_server` 监听，向所有 VoFA 客户端广播 justfloat 字节。
@@ -95,7 +102,7 @@
 | 动作 | 模式 1 | 模式 2 | 模式 3 | 模式 4 |
 |---|---|---|---|---|
 | 断开旧探针 | — | 串口 | — | 串口 |
-| 连接新探针 | 串口 | 串口 | J-Link | J-Link |
+| 连接新探针 | 串口 | 串口 | J-Link/DAPLink | J-Link/DAPLink |
 | 面板 | 串口控制台 | 串口控制台+波形面板 | RTT控制台 | RTT控制台+波形面板 |
 | 录制源 | 串口 justfloat | 串口 justfloat | 无 | RTT ch1 |
 | AI 命令链路 | 串口 | 串口 | RTT ch0 | RTT ch0 |
@@ -114,7 +121,8 @@
 
 ## 8. 决策记录
 
-- 探针用 **pylink**（square/pylink），**非 pyOCD**（pyOCD 无 RTT；J-Link 支持本就经 pylink）。
+- 探针双后端：J-Link 用 **pylink**（原生、控制块自动搜索可用）；DAPLink/任意 CMSIS-DAP 用 **pyOCD**（`pyocd.debug.rtt`）。RTT 与探针无关，故固件侧零改动。
+- DAPLink 的 pyOCD 自动搜索不可靠（见 §5.2.1），故以「精确地址/ELF 符号」为主、「RAM 扫描」兜底。
 - log/shell 共用一个控制台页，用「显示」复选框过滤（不丢数据）。
 - SendPanel 保持独立在下方（串口专用），Shell 输入行为 RTT 专用输入行。
 

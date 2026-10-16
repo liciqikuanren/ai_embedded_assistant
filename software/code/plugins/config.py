@@ -59,7 +59,7 @@ DEFAULTS = {
     "debug_mode": False,
     # 运行模式（四态）：serial=串口交互 / serial_vofa=串口+TCP VoFA 转发 / rtt_shell=RTT Shell / rtt_vofa=RTT Shell+波形+TCP VoFA
     "mode": "serial",
-    # RTT（J-Link）配置
+    # RTT（探针可切 J-Link / DAPLink）
     "rtt_chip": "STM32H743XI",
     "rtt_serial_no": "",
     "rtt_interface": "SWD",
@@ -72,11 +72,25 @@ DEFAULTS = {
     # 不再按固定通道数切帧（旧值仅对旧版固件/旧行为兼容）。
     "rtt_wave_channels": 8,
     "rtt_shell_prompt": "HC_dqj@root:",
+    # RTT 探针后端：jlink=SEGGER J-Link（pylink）/ dap=DAPLink 或任意 CMSIS-DAP（pyOCD）
+    "rtt_probe": "jlink",
     # JLinkARM.dll 显式路径（留空 = 自动搜索 EIDE 自带 / SEGGER 标准安装）
     "rtt_jlink_dll": "",
+    # ---- DAPLink / CMSIS-DAP（pyOCD）----
+    # pyOCD 目标名（内置/包目标，如 stm32h743xx；留空则用 rtt_chip 小写）
+    "rtt_dap_target": "stm32h743xx",
+    # 固件 ELF(.axf)：解析 _SEGGER_RTT 符号作为 RTT 控制块地址（推荐；留空则按下面范围扫描）
+    "rtt_dap_elf": "",
+    # 可选：CMSIS pack 目标包路径（pyOCD 找不到内置目标时用）
+    "rtt_dap_pack": "",
+    # 控制块扫描范围（仅当未填精确地址、也没给 ELF 时用；留空 = 扫 STM32H7 常用 RAM 区）
+    "rtt_cb_search_addr": "",
+    "rtt_cb_search_size": "",
     # justfloat 协议解析（调试模式）
     "justfloat_enabled": True,
     "justfloat_channel_names": {},  # 通道重命名：{"0": "PumpRPM", "1": "Flow_L_min", ...}
+    # 连接后自动查询固件通道名（wave_names）并命名；false = 始终用配置/默认 Ch0..
+    "justfloat_autoname_on_connect": True,
     # 浮点录制（调试模式）：目录（空 → 项目根/csv_floder）、默认时长（秒，默认 5 分钟）、采样率（Hz）
     "csv_dir": "",
     "csv_duration_s": 300,

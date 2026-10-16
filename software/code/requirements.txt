@@ -2,3 +2,8 @@ PyQt6>=6.6
 pyserial>=3.5
 mcp>=1.0
 pyyaml>=6.0
+uvicorn>=0.30
+
+# RTT 探针后端（可选：缺失时仅对应探针不可用，软件仍可正常启动）
+pylink-square>=1.6
+pyocd>=0.34
