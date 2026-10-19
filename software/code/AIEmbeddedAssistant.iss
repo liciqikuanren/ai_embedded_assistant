@@ -31,7 +31,7 @@ Name: "chinesesimp"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："
-Name: "jlinkdep"; Description: "本机安装 SEGGER J-Link 软件（RTT 模式需要，完成后打开官方下载页）"; GroupDescription: "外部依赖："; Flags: unchecked
+Name: "jlinkdep"; Description: "本机安装 SEGGER J-Link 软件（仅 J-Link 探针需要；DAPLink/CMSIS-DAP 用 pyOCD）"; GroupDescription: "外部依赖："; Flags: unchecked
 
 [Files]
 Source: "..\dist\AIEmbeddedAssistant\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
