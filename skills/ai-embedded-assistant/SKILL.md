@@ -25,7 +25,7 @@ AI嵌入式助手是上位机（主机侧）调试软件：**串口/RTT 调试 +
 |---|---|---|
 | 编辑代码 | AI | 直接改 .c/.h |
 | 编译 / 重建 / 清理 | **EIDE MCP** | `eide_build` / `eide_rebuild` / `eide_clean`（`eide-mcp-skill`、`stm32-eide-dev`） |
-| 烧录 / 下载 | **EIDE MCP** | `eide_flash`（OpenOCD/cmsis-dap 或 JLink，取决于工程 uploader） |
+| 烧录 / 下载 | **EIDE MCP**（异常时命令行兜底） | `eide_flash`（OpenOCD/cmsis-dap 或 JLink，取决于工程 uploader）；EIDE MCP 会话失效时用 J-Link/OpenOCD 命令行（§2.3） |
 | 调试 / 验证 / 调参 | **本技能 + AI嵌入式助手** | 串口·RTT shell·日志·波形·CSV，全部可经 MCP |
 | VOFA+ 界面 | `vofa-ui-config` 技能 | 生成 `*.tabviews.json` / `*.cmds.json` / `channels.csv` |
 
@@ -81,11 +81,24 @@ pyOCD 内置 `stm32h743xx` 的内存映射**不含 AXI SRAM**，而且其自动�
 
 ### 2.3 烧录（DAPLink / J-Link）
 
-- **EIDE MCP**：`eide_flash` 用工程 `.eide/eide.yml` 的 `uploader`（`JLink` 或 `OpenOCD`）。用 DAPLink 时把它切成 `OpenOCD` + `interface: cmsis-dap`；Keil CMSIS-DAP 等探针 OpenOCD 也能驱动。
-- **纯命令行**：`pyocd flash -t stm32h743xx --probe <uid> firmware.hex`（或 J-Link 的 `JLink.exe -device ... -CommandFile commands.jlink`）。
+- **EIDE MCP（首选）**：`eide_flash` 用工程 `.eide/eide.yml` 的 `uploader`（`JLink` 或 `OpenOCD`）。用 DAPLink 时把它切成 `OpenOCD` + `interface: cmsis-dap`；Keil CMSIS-DAP 等探针 OpenOCD 也能驱动。
+- **EIDE MCP 不可用时（最常见原因：DSH 的 MCP 会话失效，见 §3.4）→ J-Link 命令行**：
+
+  ```bash
+  cd <工程构建目录的上级>            # commands.jlink 里是 hex 的绝对路径，位置要对
+  "E:\...\SEGGER\JLink\JLink.exe" -device STM32H743XI -if SWD -speed 8000 \
+      -autoconnect 1 -CommanderScript "build\<target>\commands.jlink"
+  ```
+
+  `commands.jlink` 由 EIDE/Keil 构建生成，一般是 `r` / `halt` / `loadfile <hex>` / `r` / `go` / `exit`。
+
+  - ⚠️ **`-NoGui` 不是 `JLink.exe` 的合法参数**（会报 `Unknown command line option -NoGui` 后直接退出），不要加；
+  - 输出 `J-Link: Flash download: Bank 0 @ 0x08000000: Skipped. Contents already match` 表示**板上已经是同一份固件，不是失败**；
+  - 脚本里的第二条 `r` + `go` 会复位并运行，相当于“烧完自动重启”，省掉手动复位；
+  - 烧录后 `_SEGGER_RTT` 控制块地址可能变化：J-Link 模式 `rtt_connect` 会自动扫描；DAPLink 用 `rtt_dap_elf` 跟随新 `.axf`。
+- **纯命令行（DAPLink）**：`pyocd flash -t stm32h743xx --probe <uid> firmware.hex`
 - ⚠️ **探针是独占的**：软件连着 RTT 时探针被占用，烧录会失败（OpenOCD 报 `CMSIS-DAP command CMD_INFO failed` / `Cannot connect`，JLink 报 `No emulator ... found`）。
-  正确顺序：**`rtt_disconnect` → `eide_flash` → `rtt_connect`**（见 §6.3）。
-- 烧录后控制块地址会变：用 `rtt_dap_elf` 指向新 `.axf` 即可自动跟随；只填了固定地址的要更新。
+  正确顺序：**`rtt_disconnect` → `eide_flash`（或 J-Link 命令行）→ `rtt_connect`**（见 §6.3）。
 
 ## 3. 连接前置 / MCP 端点 / DSH 注册
 
@@ -94,9 +107,46 @@ pyOCD 内置 `stm32h743xx` 的内存映射**不含 AXI SRAM**，而且其自动�
 - 启动：`Start-Process $env:AI_EMBEDDED_ASSISTANT_EXE`（未定义则用安装路径；源码版 `python main.py`）
 - 就绪：`Test-NetConnection 127.0.0.1 -Port 8765`；GUI 切到目标运行模式
 
-### 3.2 裸 HTTP 调用（不经 DSH）
-`POST http://127.0.0.1:8765/mcp`（Streamable HTTP），头 `Accept: application/json, text/event-stream`；
-body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参数先写无 BOM UTF-8 文件再 POST。
+### 3.2 裸 HTTP 调用（不经 DSH；也是 MCP 会话失效时的兜底）
+
+两个 MCP 都是 Streamable HTTP：`POST http://127.0.0.1:8765/mcp`（助手）、`http://127.0.0.1:8940/mcp`（EIDE）。
+**必须按协议握手，不能直接 POST `tools/call`**：
+
+1. `initialize`（`protocolVersion: "2024-11-05"`）→ 从响应头取 **`Mcp-Session-Id`**；
+2. `notifications/initialized`（带 session 头、无 id）；
+3. `tools/call`（带 `Mcp-Session-Id`，建议同时带 `MCP-Protocol-Version: 2024-11-05`）。
+
+```python
+# 最小可用的裸 HTTP 调用：initialize -> tools/call（约 30 行）
+import json, urllib.request
+URL = "http://127.0.0.1:8940/mcp"          # 助手换成 8765
+
+def post(payload, session=None):
+    req = urllib.request.Request(URL, data=json.dumps(payload).encode(), method="POST")
+    req.add_header("Content-Type", "application/json")
+    req.add_header("Accept", "application/json, text/event-stream")
+    req.add_header("MCP-Protocol-Version", "2024-11-05")
+    if session:
+        req.add_header("Mcp-Session-Id", session)
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return resp.headers.get("Mcp-Session-Id"), resp.read().decode("utf-8", "replace")
+
+def sse(text):  # 响应是 SSE，只取 data: 行的 JSON
+    return [json.loads(l[5:]) for l in text.splitlines() if l.startswith("data:")]
+
+session, _ = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+    "protocolVersion": "2024-11-05", "capabilities": {},
+    "clientInfo": {"name": "raw", "version": "0.1"}}})
+post({"jsonrpc": "2.0", "method": "notifications/initialized"}, session)
+_, body = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+    "name": "eide_build",
+    "arguments": {"uid": "<.eide/eide.yml 的 miscInfo.uid>"}}}, session)
+for msg in sse(body):
+    for item in (msg.get("result") or {}).get("content", []):
+        print(item.get("text"))
+```
+
+中文参数先写无 BOM UTF-8 文件再 POST；返回值在 SSE 的 `result.content[].text` 里。
 
 ### 3.3 接进 DSH（推荐，AI 直接用原生工具）
 在 DSH profile 的 `cordis.patch.yml` 里挂 MCP 客户端（面板的「MCP」受管块格式）：
@@ -116,6 +166,31 @@ body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参
 挂上后工具名变成 `mcp__ai-embedded-assistant__rtt_connect`、`mcp__eide__eide_build` 等，本 Skill 下文用短名指代。
 **软件（8765）与 VSCode EIDE 扩展（8940）都必须在线**，否则对应条目连接失败。
 
+### 3.4 MCP 会话失效：`No valid session ID provided`（踩过的坑）
+
+**现象**：DSH 面板里 `eide`（或 `ai-embedded-assistant`）显示“连接成功、19 个工具”，
+但 agent 调 `mcp__eide__*` 每次都返回：
+
+```json
+{"code":-32000,"message":"Bad Request: No valid session ID provided"}
+```
+
+**原因**：MCP 客户端 `initialize` 时拿到的 `Mcp-Session-Id` 已失效（扩展/软件重启、会话过期或服务端重启过），
+客户端仍拿旧 ID 发请求；服务端在**会话层**直接 400，根本走不到工具分发。
+所以**“面板显示已连接”和“agent 能调用”是两件事**，不要用面板状态判断是否可用。
+
+**判断（10 秒）**：按 §3.2 裸 HTTP 重新 `initialize` → `tools/list` 能列出工具、`tools/call` 正常
+⇒ 服务端没问题，坏的是 DSH 客户端里的那条会话。
+
+**恢复**：在 DSH 的 MCP 面板把该 server **断开再连**（或重启一次 DSH Web），客户端会重新 `initialize`；
+之后 `mcp__eide__eide_build` / `eide_flash` 直接可用。
+
+**兜底**：未恢复前用 §3.2 的裸 HTTP 脚本调同名工具；已实测 `eide_get_targets`、`eide_build`、`eide_flash`
+都能这样跑通。这是“服务端正常、客户端会话坏”的通用绕行方案，8765 / 8940 都适用。
+
+> 同源坑：`initialize` 之后忘记发 `notifications/initialized`，或后续请求漏带 `Mcp-Session-Id` / `MCP-Protocol-Version`，
+> 也会得到别的 4xx/400——裸 HTTP 调用务必按 §3.2 的三步走。
+
 ## 4. MCP 工具总览（短名）
 
 - **串口**：`list_ports` `open_port` `close_port` `get_status`
@@ -126,6 +201,9 @@ body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参
 - **波形/录制**：`tcp_forward_start/stop/status`；`justfloat_status/enable/reset/frames/latest/rename/reset_names/autoname/apply_doc_channels`；`float_recorder_start/pause/resume/stop/status/list/set_dir/set_duration/set_sample_hz`
 
 > `justfloat_frames` 只保留 **500 帧**（100Hz 下≈5s），要看完整瞬态就在阶跃后 ~5s 内取帧；更长的曲线用录制 CSV。
+>
+> ⚠️ `get_status().connected` 是**串口**连接状态，**不是 RTT**：`rtt_vofa` / `rtt_shell` 模式下串口本来就不开（`connected:false` 正常）；
+> RTT 是否连通只看 `rtt_status().connected`。
 
 ## 5. 与其他 MCP / 技能的分工
 
@@ -154,11 +232,13 @@ body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参
 1. 改固件代码；
 2. `eide_build`（失败先修）；
 3. **先 `rtt_disconnect` 释放探针**；
-4. `eide_flash`；
+4. `eide_flash`；**EIDE MCP 会话失效（§3.4）时**改用 §2.3 的 J-Link 命令行（同样要求先断 RTT）；
 5. 等 0.3~1s（等 `SEGGER_RTT_Init` 跑完）→ `rtt_connect`；
 6. `read_log` 看启动日志、`shell_exec` 验证功能、波形/录制做定量分析。
 
 > 若第 4 步报 `CMSIS-DAP command CMD_INFO failed` / `Cannot connect to J-Link`：**探针被占用**（多半是本软件 RTT 没断），回到第 3 步。
+> 若报 `No valid session ID provided`：不是探针问题，是 MCP 会话失效 → 按 §3.4 重连，或直接用 §2.3 命令行烧录。
+> J-Link 输出 `Contents already match` 属正常（板内已是最新固件），脚本里的 reset + go 仍会重启运行。
 
 ## 7. 注意事项 / 坑
 
@@ -167,6 +247,9 @@ body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参
 - **通道名用同一种大小写**：固件 `wave_names` 输出的名字要和 VOFA `channels.csv` 完全一致（否则自动命名会覆盖你 CSV 里的名字）。本工程已统一成小写 `temp_kp…`。
 - shell 的回显与提示符会被主机一并广播给 VOFA（`tcp_forward` 的 `rtt_shell_rx` 分支），可能混进 JustFloat 字节流；波形抖/断先怀疑这里。
 - 工具随模式出现；切模式约 1~2s 后 MCP 工具集刷新，期间调用可能失败，稍后重试。
+- **MCP 调用报 `No valid session ID provided`**：是客户端会话失效，不是服务端坏了 → 按 §3.4 断开重连或裸 HTTP 兜底。
+- **`get_status().connected` 不代表 RTT**：`rtt_vofa` / `rtt_shell` 下串口未开很正常，RTT 状态看 `rtt_status`。
+- **J-Link 命令行别加 `-NoGui`**（JLink Commander 无此参数）；`Contents already match` 表示已是最新固件，不是失败。
 - 调试数据优先「录制 CSV + 分析」，别读原始二进制字节；`justfloat_frames` 只 500 帧。
 - 指令参数越界会被拒（`temp_sw:2`、`temp_tar:150`）——先 `list_commands` 看范围。
 
@@ -201,6 +284,10 @@ body JSON-RPC，响应取 SSE `data:` 行的 `result.content[].text`。中文参
 | `no command named: TEMP_KD` | 命令名必须小写（shell 大小写敏感） |
 | 下发命令没反应 | `rtt_vofa` 下命令进的是 shell；确认命令名是 shell 命令、且 `temp_sw` 等开关已打开 |
 | `eide_flash` 报 `CMD_INFO failed` / `Cannot connect` | 探针被占用：先 `rtt_disconnect` 再烧 |
+| 面板显示 MCP 已连接，但调用报 `No valid session ID provided` | DSH MCP 客户端会话失效：面板里断开重连该 server，或用 §3.2 裸 HTTP 兜底（§3.4） |
+| `get_status` 显示 `connected:false`，但 RTT 抓得到日志 | 正常：`get_status` 是串口状态，RTT 看 `rtt_status` |
+| `JLink.exe` 报 `Unknown command line option -NoGui` | `-NoGui` 不是 JLink Commander 参数，去掉即可 |
+| J-Link 烧录输出 `Skipped. Contents already match` | 板上已是同一份固件，不是失败 |
 | RTT 连不上（DAPLink） | `pip install pyocd`、WinUSB 驱动、`rtt_dap_target` 填 `stm32h743xx`；填 `rtt_dap_elf` 定位控制块 |
 | RTT 连不上（J-Link） | 装 SEGGER 软件或配 `rtt_jlink_dll` |
 | 波形抖动/断 | shell 回显混入 JustFloat 流（§7） |
